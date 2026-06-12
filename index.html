@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Neon Space Shooter</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+        canvas {
+            border: 2px solid #0ff;
+            box-shadow: 0 0 30px #0ff, 0 0 10px #fff;
+            background: #000;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            text-align: center;
+            color: #0ff;
+            font-size: 16px;
+            text-shadow: 0 0 5px #0ff;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="instructions">CONTROLS: ← → | ATTACK: SPACE (-50 PTS IF ENEMY ESCAPES!)</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Neon Color Palette
+    const colors = {
+        cyan: '#0ff',
+        magenta: '#f0f',
+        yellow: '#ff0',
+        green: '#0f0',
+        orange: '#ff8800',
+        red: '#ff0044',
+        white: '#fff',
+        bg: '#000'
+    };
+
+    let score = 0;
+    let isGameOver = false;
+    let gameOverReason = ''; 
+    const keys = {};
+
+    // Player (Spaceship) Settings
+    const player = {
+        x: canvas.width / 2 - 20,
+        y: canvas.height - 70,
+        width: 40,
+        height: 40,
+        speed: 6,
+        cooldown: 0, 
+        color: colors.cyan
+    };
+
+    // Game Arrays
+    const bullets = [];
+    const enemies = [];
+    const enemyBullets = [];
+    const particles = [];
+    const stars = [];
+
+    // Keyboard Event Listeners
+    document.addEventListener('keydown', (e) => keys[e.code] = true);
+    document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    // Initialize Background Stars
+    function initStars() {
+        stars.length = 0;
+        for (let i = 0; i < 50; i++) {
+            stars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2 + 0.5,
+                speed: Math.random() * 2 + 0.5,
+                alpha: Math.random() * 0.5 + 0.5
+            });
+        }
+    }
+
+    // Update and Draw Stars
+    function updateAndDrawStars() {
+        ctx.save();
+        stars.forEach(star => {
+            star.y += star.speed;
+            if (star.y > canvas.height) {
+                star.y = 0;
+                star.x = Math.random() * canvas.width;
+            }
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = '#fff';
+            ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+            ctx.fillRect(star.x, star.y, star.size, star.size);
+        });
+        ctx.restore();
+    }
+
+    // Draw Neon Background Grid
+    let bgOffset = 0;
+    function drawNeonGrid() {
+        ctx.strokeStyle = '#050a15';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let y = bgOffset % 40; y < canvas.height; y += 40) {
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+        }
+        for (let x = 0; x < canvas.width; x += 40) {
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+        }
+        ctx.stroke();
+    }
+
+    // Neon Glow Helper Effect
+    function setNeonGlow(color, blur = 15) {
+        ctx.shadowBlur = blur;
+        ctx.shadowColor = color;
+        ctx.fillStyle = color;
+        ctx.strokeStyle = color;
+    }
+
+    // Dynamic Enemy Spawning System
+    function spawnEnemy() {
+        const level = Math.floor(score / 1000);
+        const currentLevel = Math.max(0, level); 
+        const spawnChance = Math.min(0.015 + (currentLevel * 0.008), 0.06); 
+        const maxEnemies = Math.min(4 + currentLevel, 12); 
+
+        if (Math.random() < spawnChance && enemies.length < maxEnemies) {
+            const size = Math.random() * 20 + 20;
+            const type = Math.random();
+            let color, speed, shape, canShoot = false, isBomber = false, shootTimer = 0;
+
+            if (type < 0.4) {
+                color = colors.magenta; speed = Math.random() * 2 + 1; shape = 'square';
+            } else if (type < 0.65) {
+                color = colors.yellow; speed = Math.random() * 2 + 2; shape = 'triangle';
+            } else if (type < 0.8) {
+                color = colors.green; speed = Math.random() * 1 + 1; shape = 'circle';
+            } else if (type < 0.9) {
+                color = colors.orange; speed = Math.random() * 0.5 + 0.5; shape = 'diamond';
+                canShoot = true; shootTimer = Math.floor(Math.random() * 60) + 30;
+            } else {
+                // Bomber Enemy (Red Hexagon)
+                color = colors.red; speed = Math.random() * 0.5 + 0.3; shape = 'hexagon';
+                isBomber = true; shootTimer = Math.floor(Math.random() * 60) + 40;
+            }
+
+            enemies.push({
+                x: Math.random() * (canvas.width - size),
+                y: -size,
+                width: size,
+                height: size,
+                speed: speed,
+                color: color,
+                shape: shape,
+                canShoot: canShoot,
+                isBomber: isBomber,
+                shootTimer: shootTimer
+            });
+        }
+    }
+
+    // Explosion Particle Creator
+    function createExplosion(x, y, color) {
+        for (let i = 0; i < 20; i++) {
+            particles.push({
+                x: x, y: y,
+                dx: (Math.random() - 0.5) * 6,
+                dy: (Math.random() - 0.5) * 6,
+                size: Math.random() * 3 + 1,
+                color: color, alpha: 1,
+                decay: Math.random() * 0.02 + 0.01
+            });
+        }
+    }
+
+    // AABB Collision Detection
+    function checkCollision(rect1, rect2) {
+        return rect1.x < rect2.x + rect2.width &&
+               rect1.x + rect1.width > rect2.x &&
+               rect1.y < rect2.y + rect2.height &&
+               rect1.y + rect1.height > rect2.y;
+    }
+
+    // Main Logic Update
+    function update() {
+        if (isGameOver) {
+            if (keys['Space']) resetGame();
+            return;
+        }
+
+        bgOffset += 0.5;
+
+        // Player Movement
+        if (keys['ArrowLeft'] && player.x > 0) player.x -= player.speed;
+        if (keys['ArrowRight'] && player.x < canvas.width - player.width) player.x += player.speed;
+
+        // Player Fire Rate (0.5 Sec Cooldown)
+        if (player.cooldown > 0) player.cooldown--;
+        if (keys['Space'] && player.cooldown === 0) {
+            bullets.push({
+                x: player.x + player.width / 2 - 2,
+                y: player.y,
+                width: 4, height: 18,
+                speed: 10, color: colors.cyan
+            });
+            player.cooldown = 30; 
+        }
+
+        // Player Bullet Movement
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            bullets[i].y -= bullets[i].speed;
+            if (bullets[i].y < 0) bullets.splice(i, 1);
+        }
+
+        // Enemy Logic Loop
+        spawnEnemy();
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            enemies[i].y += enemies[i].speed;
+
+            // Enemy Projectile & Bomb Dropping Logic
+            if (enemies[i].canShoot || enemies[i].isBomber) {
+                enemies[i].shootTimer--;
+                if (enemies[i].shootTimer <= 0) {
+                    enemyBullets.push({
+                        x: enemies[i].x + enemies[i].width / 2 - (enemies[i].isBomber ? 6 : 2),
+                        y: enemies[i].y + enemies[i].height,
+                        width: enemies[i].isBomber ? 12 : 4,
+                        height: enemies[i].isBomber ? 12 : 12,
+                        speed: enemies[i].isBomber ? 2.5 : 4, 
+                        color: enemies[i].color,
+                        isBomb: enemies[i].isBomber
+                    });
+                    enemies[i].shootTimer = Math.floor(Math.random() * 60) + 60;
+                }
+            }
+
+            // Player and Enemy Crash Collision
+            if (checkCollision(player, enemies[i])) {
+                createExplosion(player.x + player.width/2, player.y + player.height/2, player.color);
+                createExplosion(enemies[i].x + enemies[i].width/2, enemies[i].y + enemies[i].height/2, enemies[i].color);
+                isGameOver = true;
+                gameOverReason = 'SHIP DESTROYED!';
+            }
+
+            // Escape Penalty System (Enemies crossing the bottom)
+            if (enemies[i].y > canvas.height) {
+                createExplosion(enemies[i].x + enemies[i].width/2, canvas.height - 10, colors.red);
+                
+                score -= 50; 
+                enemies.splice(i, 1);
+
+                // Game Over if score drops below zero
+                if (score < 0) {
+                    isGameOver = true;
+                    gameOverReason = 'SCORE DROPPED BELOW ZERO!';
+                }
+            }
+        }
+
+        // Enemy Bullet Movement & Collision
+        for (let i = enemyBullets.length - 1; i >= 0; i--) {
+            enemyBullets[i].y += enemyBullets[i].speed;
+            
+            if (checkCollision(player, enemyBullets[i])) {
+                createExplosion(player.x + player.width/2, player.y + player.height/2, player.color);
+                if(enemyBullets[i].isBomb) createExplosion(enemyBullets[i].x + 6, enemyBullets[i].y + 6, enemyBullets[i].color);
+                isGameOver = true;
+                gameOverReason = 'HIT BY ENEMY FIRE!';
+                enemyBullets.splice(i, 1);
+            } else if (enemyBullets[i].y > canvas.height) {
+                enemyBullets.splice(i, 1);
+            }
+        }
+
+        // Player Bullet Collision with Enemies
+        for (let b = bullets.length - 1; b >= 0; b--) {
+            for (let e = enemies.length - 1; e >= 0; e--) {
+                if (checkCollision(bullets[b], enemies[e])) {
+                    createExplosion(enemies[e].x + enemies[e].width/2, enemies[e].y + enemies[e].height/2, enemies[e].color);
+                    bullets.splice(b, 1);
+                    score += enemies[e].isBomber ? 500 : (enemies[e].canShoot ? 300 : 100);
+                    enemies.splice(e, 1);
+                    break;
+                }
+            }
+        }
+
+        // Particle Fade Animation
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].x += particles[i].dx;
+            particles[i].y += particles[i].dy;
+            particles[i].alpha -= particles[i].decay;
+            if (particles[i].alpha <= 0) particles.splice(i, 1);
+        }
+    }
+
+    // Rendering Elements
+    function draw() {
+        ctx.fillStyle = colors.bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        updateAndDrawStars();
+        drawNeonGrid();
+
+        // Particles
+        particles.forEach(p => {
+            ctx.save();
+            ctx.globalAlpha = p.alpha;
+            setNeonGlow(p.color, 10);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        });
+
+        // 1. Advanced Spaceship (Player) Drawing
+        ctx.save();
+        setNeonGlow(player.color, 20);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(player.x + player.width / 2, player.y); 
+        ctx.lineTo(player.x + player.width / 2 + 8, player.y + 15); 
+        ctx.lineTo(player.x + player.width, player.y + player.height - 10); 
+        ctx.lineTo(player.x + player.width / 2 + 6, player.y + player.height - 5); 
+        ctx.lineTo(player.x + player.width / 2, player.y + player.height); 
+        ctx.lineTo(player.x + player.width / 2 - 6, player.y + player.height - 5); 
+        ctx.lineTo(player.x, player.y + player.height - 10); 
+        ctx.lineTo(player.x + player.width / 2 - 8, player.y + 15); 
+        ctx.closePath();
+        ctx.stroke();
+
+        // Cockpit
+        ctx.beginPath();
+        ctx.moveTo(player.x + player.width / 2, player.y + 8);
+        ctx.lineTo(player.x + player.width / 2 + 4, player.y + 20);
+        ctx.lineTo(player.x + player.width / 2 - 4, player.y + 20);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.4)';
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+
+        // Engine Fire Thruster
+        ctx.save();
+        setNeonGlow(colors.orange, 15);
+        ctx.fillStyle = colors.orange;
+        ctx.beginPath();
+        ctx.moveTo(player.x + player.width / 2 - 4, player.y + player.height);
+        ctx.lineTo(player.x + player.width / 2 + 4, player.y + player.height);
+        ctx.lineTo(player.x + player.width / 2, player.y + player.height + Math.random() * 10 + 5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // 2. Player Bullets
+        bullets.forEach(bullet => {
+            ctx.save();
+            setNeonGlow(bullet.color, 10);
+            ctx.fillStyle = bullet.color;
+            ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+            ctx.restore();
+        });
+
+        // 3. Enemy Bullets & Bombs
+        enemyBullets.forEach(bullet => {
+            ctx.save();
+            setNeonGlow(bullet.color, 15);
+            ctx.fillStyle = bullet.color;
+            if (bullet.isBomb) {
+                ctx.beginPath();
+                ctx.arc(bullet.x + bullet.width/2, bullet.y + bullet.height/2, bullet.width/2, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+            }
+            ctx.restore();
+        });
+
+        // 4. Enemy Variety Shapes
+        enemies.forEach(enemy => {
+            ctx.save();
+            setNeonGlow(enemy.color, 15);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            if (enemy.shape === 'square') {
+                ctx.rect(enemy.x, enemy.y, enemy.width, enemy.height);
+            } else if (enemy.shape === 'triangle') {
+                ctx.moveTo(enemy.x + enemy.width / 2, enemy.y);
+                ctx.lineTo(enemy.x, enemy.y + enemy.height);
+                ctx.lineTo(enemy.x + enemy.width, enemy.y + enemy.height);
+                ctx.closePath();
+            } else if (enemy.shape === 'circle') {
+                ctx.arc(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, enemy.width / 2, 0, Math.PI * 2);
+            } else if (enemy.shape === 'diamond') {
+                ctx.moveTo(enemy.x + enemy.width / 2, enemy.y);
+                ctx.lineTo(enemy.x + enemy.width, enemy.y + enemy.height / 2);
+                ctx.lineTo(enemy.x + enemy.width / 2, enemy.y + enemy.height);
+                ctx.lineTo(enemy.x, enemy.y + enemy.height / 2);
+                ctx.closePath();
+            } else if (enemy.shape === 'hexagon') {
+                const w = enemy.width; const h = enemy.height;
+                ctx.moveTo(enemy.x + w/2, enemy.y);
+                ctx.lineTo(enemy.x + w, enemy.y + h/4);
+                ctx.lineTo(enemy.x + w, enemy.y + h*3/4);
+                ctx.lineTo(enemy.x + w/2, enemy.y + h);
+                ctx.lineTo(enemy.x, enemy.y + h*3/4);
+                ctx.lineTo(enemy.x, enemy.y + h/4);
+                ctx.closePath();
+            }
+            ctx.stroke();
+            ctx.restore();
+        });
+
+        // UI Panel (SCORE, LEVEL, COOLDOWN)
+        ctx.save();
+        const uiColor = score <= 100 ? colors.red : colors.cyan;
+        setNeonGlow(uiColor, 10);
+        ctx.fillStyle = uiColor;
+        ctx.font = '20px "Courier New"';
+        
+        const currentLevel = Math.max(1, Math.floor(score / 1000) + 1);
+        ctx.fillText(`SCORE: ${score}`, 20, 35);
+        ctx.fillText(`LEVEL: ${currentLevel}`, 20, 60); 
+        
+        if (player.cooldown > 0) {
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.4)';
+            ctx.fillRect(20, 70, (player.cooldown / 30) * 100, 6); 
+        }
+        ctx.restore();
+
+        // Game Over Screen
+        if (isGameOver) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            setNeonGlow(colors.magenta, 25);
+            ctx.fillStyle = colors.magenta;
+            ctx.font = '50px "Courier New"';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 30);
+
+            // Print Specific Game Over Reason
+            setNeonGlow(colors.orange, 15);
+            ctx.fillStyle = colors.orange;
+            ctx.font = '16px "Courier New"';
+            ctx.fillText(gameOverReason, canvas.width / 2, canvas.height / 2 + 15);
+
+            setNeonGlow(colors.white, 15);
+            ctx.fillStyle = colors.white;
+            ctx.font = '20px "Courier New"';
+            ctx.fillText('Press SPACE to Restart', canvas.width / 2, canvas.height / 2 + 60);
+            ctx.textAlign = 'start';
+            ctx.restore();
+        }
+    }
+
+    // Reset Game State
+    function resetGame() {
+        score = 0;
+        isGameOver = false;
+        gameOverReason = '';
+        bullets.length = 0;
+        enemies.length = 0;
+        enemyBullets.length = 0;
+        particles.length = 0;
+        player.x = canvas.width / 2 - 20;
+        player.cooldown = 0;
+        initStars();
+    }
+
+    // Initialization and Game Loop Trigger
+    initStars();
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+    gameLoop();
+</script>
+</body>
+</html>
